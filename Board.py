@@ -1,6 +1,7 @@
 from Block import Block
 from Colors import Colors
 from copy import copy, deepcopy
+from numba import jit, numba, cuda
 import pygame
 
 
@@ -9,14 +10,13 @@ class Board:
         self.board = [[Block(i, j, Colors.random_color().value) for i in range(14)] for j in range(14)]
         self.board[0][0].set_captured(True)
         self.solved = False
-        self.captured = self.change_color(self.board[0][0].color)
+        self.perimeter = 4
+        self.captured = self.count_captured()
 
     def change_color(self, color):
         # chose same color
-        if self.board[0][0].color == color:
-            print("Already this color!")
-            return
 
+        perimeter = 0
         count = 0  # used to check if solved in same iteration
         checked = list()  # prevents the same block being checked twice
         temp = deepcopy(self)  # copy needed to prevent multiple moves in a single method call
@@ -26,27 +26,45 @@ class Board:
                 if block.is_captured():
                     count += 1
                     self.board[block.y][block.x].set_color(color)
-                    if block.has_left() and not (block.x - 1, block.y) in checked and not temp.get_left(block).captured and temp.get_left(block).color == color:
-                        checked.append((block.x - 1, block.y))
-                        count += 1
-                        self.recursive_capture(self.get_left(block), color)
-                    if block.has_top() and not (block.x, block.y - 1) in checked and not temp.get_top(block).captured and temp.get_top(block).color == color:
-                        checked.append((block.x, block.y - 1))
-                        count += 1
-                        self.recursive_capture(self.get_top(block), color)
-                    if block.has_right() and not (block.x + 1, block.y) in checked and not temp.get_right(block).captured and temp.get_right(block).color == color:
-                        checked.append((block.x + 1, block.y))
-                        count += 1
-                        self.recursive_capture(self.get_right(block), color)
-                    if block.has_bottom() and not (block.x, block.y + 1) in checked and not temp.get_bottom(block).captured and temp.get_bottom(block).color == color:
-                        checked.append((block.x, block.y + 1))
-                        count += 1
-                        self.recursive_capture(self.get_bottom(block), color)
+                    if block.has_left():
+                        if not (block.x - 1, block.y) in checked and not temp.get_left(block).captured and temp.get_left(block).color == color:
+                            checked.append((block.x - 1, block.y))
+                            self.recursive_capture(self.get_left(block), color)
+                    else:
+                        perimeter += 1
+                    if block.has_top():
+                        if not (block.x, block.y - 1) in checked and not temp.get_top(block).captured and temp.get_top(block).color == color:
+                            checked.append((block.x, block.y - 1))
+                            self.recursive_capture(self.get_top(block), color)
+                    else:
+                        perimeter += 1
+                    if block.has_right():
+                        if not (block.x + 1, block.y) in checked and not temp.get_right(block).captured and temp.get_right(block).color == color:
+                            checked.append((block.x + 1, block.y))
+                            self.recursive_capture(self.get_right(block), color)
+                    else:
+                        perimeter += 1
+                    if block.has_bottom():
+                        if not (block.x, block.y + 1) in checked and not temp.get_bottom(block).captured and temp.get_bottom(block).color == color:
+                            checked.append((block.x, block.y + 1))
+                            self.recursive_capture(self.get_bottom(block), color)
+                    else:
+                        perimeter += 1
 
+        self.perimeter = perimeter
+
+        self.captured = count
         if count == 196:
             self.solved = True
 
-        return count
+    @numba.jit(forceobj=True)
+    def count_captured(self):
+        captured = 0
+        for x in range(14):
+            for y in range(14):
+                if self.board[y][x].captured:
+                    captured += 1
+        return captured
 
     def recursive_capture(self, block, color):
         block.set_captured(True)
@@ -59,6 +77,7 @@ class Board:
             self.recursive_capture(self.get_right(block), color)
         if block.has_bottom() and not self.get_bottom(block).captured and self.get_bottom(block).color == color:
             self.recursive_capture(self.get_bottom(block), color)
+
 
     def get_left(self, block):
         if block.x == 0:
@@ -98,18 +117,31 @@ class Board:
     # todo: turn into weight function for machine learning
     # returns the color choice which would capture the most blocks in the next move
     def next_move(self):
-        best_color = self.board[0][0].color
-        max_capture = 0
+        return self.branch()[0][0]
+
+    def branch(self):
+        move_evals = dict((color.value, 0) for color in list(Colors))
+
         for color in list(Colors):
             temp = deepcopy(self)
             if color.value == temp.board[0][0].color:
                 continue
-            current = temp.change_color(color.value)
-            if current > max_capture:
-                max_capture = current
-                best_color = color.value
-        print(max_capture)
-        return best_color
+            temp.change_color(color.value)
+            move_evals[color.value] = temp.count_captured() - self.count_captured()
+        move_evals = sorted(move_evals.items(), key=lambda item: item[1], reverse=True)
+        return move_evals
+
+
+    def static_branch(self):
+        move_evals = [0, 0, 0, 0, 0, 0]
+        for index, color in enumerate(list(Colors)):
+            temp = deepcopy(self)
+            if color.value == temp.board[0][0].color:
+                continue
+            temp.change_color(color.value)
+            move_evals[index] = temp.count_captured() - self.count_captured()
+
+        return move_evals
 
     # todo: turn into weight function for machine learning
     # returns the color which occurs most in the set of uncaptured blocks
