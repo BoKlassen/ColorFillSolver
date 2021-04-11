@@ -1,10 +1,10 @@
 import Board
-from copy import deepcopy
+from copy import copy
 
 
 class Player:
     def __init__(self, board):
-        self.board = deepcopy(board)
+        self.board = copy(board)
         self.alive = True
         self.moves = 0
 

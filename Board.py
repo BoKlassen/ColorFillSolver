@@ -1,27 +1,74 @@
 from Block import Block
 from Colors import Colors
 from copy import copy, deepcopy
-from numba import jit, numba, cuda
+from numba import jit
 import pygame
+import numpy
 
 
 class Board:
-    def __init__(self):
-        self.board = [[Block(i, j, Colors.random_color().value) for i in range(14)] for j in range(14)]
+    def __init__(self, size):
+        self.board = numpy.array([[Block(i, j, Colors.random_color().value, size) for i in range(size)] for j in range(size)])
+        self.size = size
         self.board[0][0].set_captured(True)
         self.solved = False
         self.perimeter = 4
+        self.moves = []
+        self.change_color(self.board[0][0].color)
         self.captured = self.count_captured()
 
-    def change_color(self, color):
-        # chose same color
+    def backtrack_util(self, max_depth, width):
+        move_list = self.backtrack(0, max_depth, width)
+        culled = move_list[0]
+        for _ in range(len(self.moves)):
+            culled.pop(0)
+        return culled
 
+    # finds the max captured of tree, and the move needed to get there
+    def backtrack(self, depth, max_depth, width):
+        # base case
+        if depth >= max_depth or self.solved:
+            result = (self.moves, self.captured)
+            return result
+        # else
+        child_nodes = self.get_best_moves(width)
+        max_captured = self.captured
+        move_lists = []
+        values = []
+        for node in child_nodes:
+            child_board = deepcopy(self)
+            child_board.change_color(node[0])
+            result = child_board.backtrack(depth + 1, max_depth, width)
+            move_lists.append(list(result[0]))
+            values.append(result[1])
+        ind = values.index(max(values))
+        ret = (move_lists[ind], values[ind])
+        return ret
+
+        # values = []
+        # for node in child_nodes:
+        #     child_board = deepcopy(self)
+        #     child_board.change_color(node[0])
+        #     values.append((node[0], child_board.backtrack(depth + 1, max_depth, n)))
+        # return values
+
+    def get_best_moves(self, n):
+        options = []
+        weights = self.branch()
+        for index, entry in enumerate(weights):
+            if index >= n or entry[1] == 0:
+                break
+            options.append(entry)
+        return options
+
+    def change_color(self, color):
+        self.moves.append(color)
         perimeter = 0
         count = 0  # used to check if solved in same iteration
         checked = list()  # prevents the same block being checked twice
-        temp = deepcopy(self)  # copy needed to prevent multiple moves in a single method call
-        for x in range(14):
-            for y in range(14):
+        temp = copy(self)  # copy needed to prevent multiple moves in a single method call
+        for x in range(self.size):
+            for y in range(self.size):
                 block = temp.board[y][x]
                 if block.is_captured():
                     count += 1
@@ -54,14 +101,13 @@ class Board:
         self.perimeter = perimeter
 
         self.captured = count
-        if count == 196:
+        if count == self.size * self.size:
             self.solved = True
 
-    @numba.jit(forceobj=True)
     def count_captured(self):
         captured = 0
-        for x in range(14):
-            for y in range(14):
+        for x in range(self.size):
+            for y in range(self.size):
                 if self.board[y][x].captured:
                     captured += 1
         return captured
@@ -78,7 +124,6 @@ class Board:
         if block.has_bottom() and not self.get_bottom(block).captured and self.get_bottom(block).color == color:
             self.recursive_capture(self.get_bottom(block), color)
 
-
     def get_left(self, block):
         if block.x == 0:
             return None
@@ -94,24 +139,24 @@ class Board:
         return self.board[y][x]
 
     def get_right(self, block):
-        if block.x == 13:
+        if block.x == self.size - 1:
             return None
         x = block.x + 1
         y = block.y
         return self.board[y][x]
 
     def get_bottom(self, block):
-        if block.y == 13:
+        if block.y == self.size - 1:
             return None
         x = block.x
         y = block.y + 1
         return self.board[y][x]
 
     def draw(self, window):
-        pygame.draw.rect(window, (100, 100, 100), window.get_rect())
+        pygame.draw.rect(window, (60, 60, 60), window.get_rect())
         for row in self.board:
             for block in row:
-                pygame.draw.rect(window, block.color, (block.x * 40 + 20, block.y * 40 + 40, 40, 40))
+                pygame.draw.rect(window, block.color, (block.x * 40 + 10, block.y * 40 + 10, 40, 40))
         pygame.display.update()
 
     # todo: turn into weight function for machine learning
@@ -131,7 +176,6 @@ class Board:
         move_evals = sorted(move_evals.items(), key=lambda item: item[1], reverse=True)
         return move_evals
 
-
     def static_branch(self):
         move_evals = [0, 0, 0, 0, 0, 0]
         for index, color in enumerate(list(Colors)):
@@ -145,6 +189,7 @@ class Board:
 
     # todo: turn into weight function for machine learning
     # returns the color which occurs most in the set of uncaptured blocks
+    @jit(nopython=True)
     def most_remaining_move(self):
         # map used to count occurrences of colors in uncaptured blocks
         uncaptured_counts = dict((color.value, 0) for color in list(Colors))

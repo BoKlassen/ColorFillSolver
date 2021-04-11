@@ -1,5 +1,6 @@
 class Block:
-    def __init__(self, x, y, color):
+    def __init__(self, x, y, color, board_size):
+        self.board_size = board_size
         self.x = x
         self.y = y
         self.color = color
@@ -24,8 +25,8 @@ class Block:
         return self.y > 0
 
     def has_right(self):
-        return self.x < 13
+        return self.x < self.board_size - 1
 
     def has_bottom(self):
-        return self.y < 13
+        return self.y < self.board_size - 1
 
